@@ -96,10 +96,29 @@ public class StringTable
   }
 
   [MustUseReturnValue]
+  public unsafe string AddUtf8BytesOnlyInternAscii(byte* pointer, int bytesLengthWithoutNullTerminator)
+  {
+    var ptr = new PointerToUtf8String(pointer, bytesLengthWithoutNullTerminator);
+    return Add<PointerToUtf8String, PointerToUtf8StringInternSupport>(in ptr);
+  }
+
+  [MustUseReturnValue]
+  public unsafe string AddUtf8BytesOnlyInternAscii(byte[] utf8BytesWithoutNullTerminator)
+  {
+    fixed (byte* data = utf8BytesWithoutNullTerminator)
+    {
+      var ptr = new PointerToUtf8String(data, utf8BytesWithoutNullTerminator.Length);
+      return Add<PointerToUtf8String, PointerToUtf8StringInternSupport>(in ptr);
+    }
+  }
+
+  [MustUseReturnValue]
   public string Add<TSource, TStringInternSupport>(in TSource source, TStringInternSupport internSupport = default)
     where TStringInternSupport : struct, IStringInternSupport<TSource>
   {
     var hashCode = internSupport.GetFNVHashCode(in source);
+    if (hashCode == 0)
+      return internSupport.Materialize(in source);
 
     // capture array to avoid extra range checks
     var localTable = myLocalTable;
@@ -386,10 +405,65 @@ public class StringTable
       return source.chars.Substring(startIndex: source.start, length: source.length);
     }
   }
+
+  private readonly unsafe struct PointerToUtf8String(byte* pointer, int bytesLengthWithoutNullTerminatorInBytes)
+  {
+    public readonly byte* Pointer = pointer;
+    public readonly int BytesLengthWithoutNullTerminator = bytesLengthWithoutNullTerminatorInBytes;
+  }
+
+  private struct PointerToUtf8StringInternSupport : IStringInternSupport<PointerToUtf8String>
+  {
+    public unsafe int GetFNVHashCode(in PointerToUtf8String source)
+    {
+      var hashCode = FnvOffsetBias;
+      var length = source.BytesLengthWithoutNullTerminator;
+      var data = source.Pointer;
+
+      byte asciiMask = 0;
+
+      for (var index = 0; index < length; index++)
+      {
+        var b = data[index];
+        asciiMask |= b;
+        hashCode = unchecked((hashCode ^ b) * FnvPrime);
+      }
+
+      var isAscii = (asciiMask & 0x80) == 0;
+      return isAscii ? hashCode : 0;
+    }
+
+    public unsafe bool TextEquals(string candidate, in PointerToUtf8String source)
+    {
+      if (source.BytesLengthWithoutNullTerminator != candidate.Length)
+        return false;
+
+      var ptr = source.Pointer;
+      for (var index = 0; index < candidate.Length; index++)
+      {
+        if (candidate[index] != ptr[index])
+          return false;
+      }
+
+      return true;
+    }
+
+    public unsafe string Materialize(in PointerToUtf8String source)
+    {
+      return new string(
+        value: (sbyte*) source.Pointer,
+        startIndex: 0,
+        length: source.BytesLengthWithoutNullTerminator,
+        enc: Encoding.UTF8);
+    }
+  }
 }
 
 public interface IStringInternSupport<TSource>
 {
+  /// <summary>
+  /// 0 return means "do not intern this string, only materialize"
+  /// </summary>
   [Pure] int GetFNVHashCode(in TSource source);
   [Pure] bool TextEquals(string candidate, in TSource source);
   [Pure] string Materialize(in TSource source);

@@ -27,7 +27,7 @@ public class BasicTests
   [TestCase(10, 10)]
   [TestCase(1000, 100)]
   [TestCase(1000, 2000)]
-  public void Method(int capacity, int instancesToCreate)
+  public void Intern(int capacity, int instancesToCreate)
   {
     Token.InstancesCount = 0;
 

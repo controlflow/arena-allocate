@@ -1,10 +1,11 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
-
 #nullable enable
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using NUnit.Framework;
+// ReSharper disable StringLiteralTypo
 
 namespace ArenaAlloc.Tests;
 
@@ -45,11 +46,28 @@ public sealed class StringTableTests
     var s3 = st.Add(" ");
     Assert.AreSame(s2, s3);
 
-    var s4 = st.Add(new char[1] { ' ' }, start: 0, length: 1);
+    var s4 = st.Add(new[] { ' ' }, start: 0, length: 1);
     Assert.AreSame(s3, s4);
 
     var s5 = st.Add("ABC DEF", 3, 1);
     Assert.AreSame(s4, s5);
+
+    var s6 = st.AddUtf8BytesOnlyInternAscii(Encoding.UTF8.GetBytes(" "));
+    Assert.AreSame(s5, s6);
+  }
+
+  [Test]
+  [SuppressMessage("ReSharper", "UseUtf8StringLiteral")]
+  public void TestUtf8()
+  {
+    var st = new StringTable();
+
+    var s1 = st.Add("hello");
+    var s2 = st.AddUtf8BytesOnlyInternAscii(Encoding.UTF8.GetBytes("hello"));
+    var s3 = st.AddUtf8BytesOnlyInternAscii(Encoding.UTF8.GetBytes("привет"));
+    Assert.AreSame(s1, s2);
+    Assert.AreNotSame(s1, s3);
+    Assert.AreNotSame(s2, s3);
   }
 
   [Test]
@@ -81,24 +99,19 @@ public sealed class StringTableTests
     Assert.AreSame(s1, s2);
   }
 
-  private static unsafe bool TestTextEqualsASCII(string str, string ascii)
+  private static bool TestTextEqualsASCII(string str, string ascii)
   {
-    var asciiBytes = Encoding.ASCII.GetBytes(ascii);
+    var st = new StringTable();
 
-    fixed (byte* ptr = asciiBytes)
-    {
-      return true;
-      // var ptrResult = StringTable.TextEqualsASCII(str, new ReadOnlySpan<byte>(ptr, ascii.Length));
-      // var sbResult = StringTable.TextEquals(str, new StringBuilder(ascii));
-      // var substrResult = StringTable.TextEquals(str, "xxx" + ascii + "yyy", 3, ascii.Length);
-      // Assert.Equal(substrResult, sbResult);
-      // Assert.Equal(ptrResult, sbResult);
-      // return ptrResult;
-    }
+    var s1 = st.Add(str);
+
+    var asciiBytes = Encoding.ASCII.GetBytes(ascii);
+    var s2 = st.AddUtf8BytesOnlyInternAscii(asciiBytes);
+
+    return ReferenceEquals(s1, s2);
   }
 
   [Test]
-  [Ignore("because reasons")]
   public void TextEquals1()
   {
     Assert.True(TestTextEqualsASCII("", ""));

@@ -1,5 +1,4 @@
-﻿#nullable enable
-namespace ArenaAlloc;
+﻿namespace ArenaAlloc;
 
 public interface IArenaParticipant
 {
