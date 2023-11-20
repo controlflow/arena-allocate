@@ -5,47 +5,26 @@ using JetBrains.Annotations;
 
 namespace ArenaAlloc;
 
-public sealed class Arena<T>
-  where T : class, IArenaParticipant
+public abstract class ArenaBase<T> where T : IArenaParticipant
 {
-  public Arena(int capacity, Func<T> factory)
+  protected readonly T?[] Array;
+  protected int FreeIndex;
+
+  protected ArenaBase(int capacity)
   {
     if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
 
-    myArray = new T[capacity];
-    myFreeIndex = -1;
-    myFactory = factory;
+    Array = new T[capacity];
+    FreeIndex = -1;
   }
 
-  private readonly Func<T> myFactory;
-  private readonly T?[] myArray;
-  private int myFreeIndex;
-
-  public int Capacity => myArray.Length;
-  public float Utilization => (float) Math.Min(myFreeIndex + 1, myArray.Length) / Capacity;
-
-  [MustUseReturnValue]
-  public T Alloc()
-  {
-    var array = myArray;
-
-    if (myFreeIndex < array.Length)
-    {
-      var newFreeIndex = Interlocked.Increment(ref myFreeIndex);
-      if (newFreeIndex < array.Length)
-      {
-        ref var slot = ref array[newFreeIndex];
-        return slot ??= myFactory();
-      }
-    }
-
-    return myFactory();
-  }
+  public int Capacity => Array.Length;
+  public float Utilization => (float) Math.Min(FreeIndex + 1, Array.Length) / Capacity;
 
   public void Reset()
   {
-    var array = myArray;
-    var lastIndex = myFreeIndex;
+    var array = Array;
+    var lastIndex = FreeIndex;
 
     for (var index = 0; index < array.Length; index++)
     {
@@ -55,6 +34,52 @@ public sealed class Arena<T>
       array[index]!.ClearAllReferences();
     }
 
-    myFreeIndex = -1;
+    FreeIndex = -1;
+  }
+}
+
+public class Arena<T>(int capacity, [RequireStaticDelegate] Func<T> factory)
+  : ArenaBase<T>(capacity)
+  where T : class, IArenaParticipant
+{
+  [MustUseReturnValue]
+  public T Alloc()
+  {
+    var array = Array;
+
+    if (FreeIndex < array.Length)
+    {
+      var newFreeIndex = Interlocked.Increment(ref FreeIndex);
+      if (newFreeIndex < array.Length)
+      {
+        ref var slot = ref array[newFreeIndex];
+        return slot ??= factory();
+      }
+    }
+
+    return factory();
+  }
+}
+
+public class Arena<T, TContext>(int capacity, [RequireStaticDelegate] Func<TContext, T> factory)
+  : ArenaBase<T>(capacity)
+  where T : class, IArenaParticipant
+{
+  [MustUseReturnValue]
+  public T Alloc(TContext context)
+  {
+    var array = Array;
+
+    if (FreeIndex < array.Length)
+    {
+      var newFreeIndex = Interlocked.Increment(ref FreeIndex);
+      if (newFreeIndex < array.Length)
+      {
+        ref var slot = ref array[newFreeIndex];
+        return slot ??= factory(context);
+      }
+    }
+
+    return factory(context);
   }
 }

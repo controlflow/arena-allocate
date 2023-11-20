@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -30,8 +31,9 @@ public class BasicTests
   {
     Token.InstancesCount = 0;
 
-    var arena = new Arena<Token>(capacity, factory: () => new Token());
+    var arena = new Arena<Token>(capacity, factory: static () => new Token());
     var instances1 = new HashSet<Token>(ReferenceEqualityComparer<Token>.Instance);
+    Assert.AreEqual(arena.Capacity, capacity);
 
     for (var index = 0; index < instancesToCreate; index++)
     {
@@ -76,7 +78,7 @@ public class BasicTests
     var capacity = myRandom.Next(100_000, 10_000_000);
     var instancesToAllocate = myRandom.Next(10_000, 1_000_000_000);
 
-    var arena = new Arena<Dummy>(capacity, () => new Dummy());
+    var arena = new Arena<Dummy>(capacity, static () => new Dummy());
     var bag = new ConcurrentBag<Dummy>();
 
     var instancesLeft = instancesToAllocate;
@@ -92,6 +94,21 @@ public class BasicTests
 
     var set = new HashSet<Dummy>(bag, ReferenceEqualityComparer<Dummy>.Instance);
     Assert.AreEqual(set.Count, bag.Count);
+  }
+
+  [Test]
+  public void WithContext()
+  {
+    const int capacity = 100;
+
+    var arena1 = new Arena<Dummy>(capacity: capacity, static () => new Dummy());
+    var arena2 = new Arena<Dummy, Arena<Dummy>>(capacity: capacity, static arena1 => new Dummy { Inner = arena1.Alloc() });
+
+    for (var index = 0; index < capacity * 2; index++)
+    {
+      var dummy = arena2.Alloc(arena1);
+      Assert.IsNotNull(dummy.Inner);
+    }
   }
 
   private class Token : IArenaParticipant
@@ -113,6 +130,9 @@ public class BasicTests
 
   private class Dummy : IArenaParticipant
   {
+    [SuppressMessage("ReSharper", "PropertyCanBeMadeInitOnly.Local")]
+    public Dummy? Inner { get; set; }
+
     public Dummy()
     {
       Thread.SpinWait(10);
