@@ -4,6 +4,7 @@
 
 #nullable enable
 using System;
+using System.Text;
 using System.Threading;
 using JetBrains.Annotations;
 
@@ -62,212 +63,104 @@ public class StringTable
   // the counter is not static to avoid interlocked operations and cross-thread traffic
   private int myLocalRandom = Environment.TickCount;
 
+  [MustUseReturnValue]
   public string Add(string chars, int start, int length)
   {
-    var hashCode = GetFNVHashCode(chars, start, length);
-
-    // capture array to avoid extra range checks
-    var array = myLocalTable;
-    var index = LocalIdxFromHash(hashCode);
-
-    var text = array[index].Text;
-    if (text != null && array[index].HashCode == hashCode)
-    {
-      var result = array[index].Text!;
-      if (TextEquals(result, chars, start, length))
-        return result;
-    }
-
-    var shared = FindSharedEntry(chars, start, length, hashCode);
-    if (shared != null)
-    {
-      // PERF: the following code does element-wise assignment of a struct
-      //       because current JIT produces better code compared to
-      //       array[index] = new Entry(...)
-      array[index].HashCode = hashCode;
-      array[index].Text = shared;
-
-      return shared;
-    }
-
-    return AddItem(chars, start, length, hashCode);
+    var source = (chars, start, length);
+    return Add<(string chars, int start, int length), StringArrayPartInternSupport>(in source);
   }
 
+  [MustUseReturnValue]
   public string Add(char[] chars, int start, int length)
   {
-    var hashCode = GetFNVHashCode(chars, start, length);
-
-    // capture array to avoid extra range checks
-    var array = myLocalTable;
-    var index = LocalIdxFromHash(hashCode);
-
-    var text = array[index].Text;
-    if (text != null && array[index].HashCode == hashCode)
-    {
-      var result = array[index].Text!;
-      if (TextEquals(result, chars, start, length))
-        return result;
-    }
-
-    var shared = FindSharedEntry(chars, start, length, hashCode);
-    if (shared != null)
-    {
-      // PERF: the following code does element-wise assignment of a struct
-      //       because current JIT produces better code compared to
-      //       array[index] = new Entry(...)
-      array[index].HashCode = hashCode;
-      array[index].Text = shared;
-
-      return shared;
-    }
-
-    return AddItem(chars, start, length, hashCode);
+    var source = (chars, start, length);
+    return Add<(char[] chars, int start, int length), CharArrayPartInternSupport>(in source);
   }
 
+  [MustUseReturnValue]
   public string Add(string chars)
   {
-    var hashCode = GetFNVHashCode(chars);
+    return Add<string, StringInternSupport>(chars);
+  }
+
+  [MustUseReturnValue]
+  public string Add(StringBuilder builder)
+  {
+    return Add<StringBuilder, StringBuilderInternSupport>(builder);
+  }
+
+  [MustUseReturnValue]
+  public string Add<TSource, TStringInternSupport>(in TSource source, TStringInternSupport internSupport = default)
+    where TStringInternSupport : struct, IStringInternSupport<TSource>
+  {
+    var hashCode = internSupport.GetFNVHashCode(in source);
 
     // capture array to avoid extra range checks
-    var array = myLocalTable;
-    var index = LocalIdxFromHash(hashCode);
+    var localTable = myLocalTable;
+    var localIndex = LocalIndexFromHash(hashCode);
 
-    var text = array[index].Text;
-    if (text != null && array[index].HashCode == hashCode)
+    var text = localTable[localIndex].Text;
+    if (text != null && localTable[localIndex].HashCode == hashCode)
     {
-      var result = array[index].Text;
-      if (result == chars)
-        return result;
+      var local = localTable[localIndex].Text!;
+
+      if (internSupport.TextEquals(local, in source))
+        return local;
     }
 
-    var shared = FindSharedEntry(chars, hashCode);
+    var shared = FindSharedEntry(source, hashCode, internSupport);
     if (shared != null)
     {
       // PERF: the following code does element-wise assignment of a struct
       //       because current JIT produces better code compared to
-      //       array[index] = new Entry(...)
-      array[index].HashCode = hashCode;
-      array[index].Text = shared;
+      //       local[index] = new Entry(...)
+      localTable[localIndex].HashCode = hashCode;
+      localTable[localIndex].Text = shared;
 
       return shared;
     }
 
-    AddCore(chars, hashCode);
-    return chars;
-  }
-
-  private static string? FindSharedEntry(string chars, int start, int length, int hashCode)
-  {
-    var array = ourSharedTable;
-    var index = SharedIdxFromHash(hashCode);
-
-    string? entry = null;
-    // we use quadratic probing here
-    // bucket positions are (n^2 + n)/2 relative to the masked hashcode
-    for (var i = 1; i < SharedBucketSize + 1; i++)
-    {
-      entry = array[index].Text;
-      var hash = array[index].HashCode;
-
-      if (entry != null)
-      {
-        if (hash == hashCode && TextEquals(entry, chars, start, length))
-          break;
-
-        // this is not entry we are looking for
-        entry = null;
-      }
-      else
-      {
-        // once we see unfilled entry, the rest of the bucket will be empty
-        break;
-      }
-
-      index = (index + i) & SharedSizeMask;
-    }
-
-    return entry;
-  }
-
-  private static string? FindSharedEntry(char[] chars, int start, int length, int hashCode)
-  {
-    var array = ourSharedTable;
-    var index = SharedIdxFromHash(hashCode);
-
-    string? entry = null;
-    // we use quadratic probing here
-    // bucket positions are (n^2 + n)/2 relative to the masked hashcode
-    for (var i = 1; i < SharedBucketSize + 1; i++)
-    {
-      entry = array[index].Text;
-      var hash = array[index].HashCode;
-
-      if (entry != null)
-      {
-        if (hash == hashCode && TextEquals(entry, chars, start, length))
-          break;
-
-        // this is not entry we are looking for
-        entry = null;
-      }
-      else
-      {
-        // once we see unfilled entry, the rest of the bucket will be empty
-        break;
-      }
-
-      index = (index + i) & SharedSizeMask;
-    }
-
-    return entry;
-  }
-
-  private static string? FindSharedEntry(string chars, int hashCode)
-  {
-    var array = ourSharedTable;
-    var index = SharedIdxFromHash(hashCode);
-
-    string? entry = null;
-
-    // we use quadratic probing here
-    // bucket positions are (n^2 + n)/2 relative to the masked hashcode
-    for (var i = 1; i < SharedBucketSize + 1; i++)
-    {
-      entry = array[index].Text;
-      var hash = array[index].HashCode;
-
-      if (entry != null)
-      {
-        if (hash == hashCode && entry == chars)
-          break;
-
-        // this is not entry we are looking for
-        entry = null;
-      }
-      else
-      {
-        // once we see unfilled entry, the rest of the bucket will be empty
-        break;
-      }
-
-      index = (index + i) & SharedSizeMask;
-    }
-
-    return entry;
-  }
-
-  private string AddItem(string chars, int startIndex, int length, int hashCode)
-  {
-    var text = chars.Substring(startIndex, length); // allocation
+    text = internSupport.Materialize(source);
     AddCore(text, hashCode);
     return text;
   }
 
-  private string AddItem(char[] chars, int startIndex, int length, int hashCode)
+  private static string? FindSharedEntry<TSource, TStringInternSupport>(
+    in TSource source,
+    int hashCode,
+    TStringInternSupport internSupport)
+    where TStringInternSupport : struct, IStringInternSupport<TSource>
   {
-    var text = new string(chars, startIndex, length); // allocation
-    AddCore(text, hashCode);
-    return text;
+    var sharedArray = ourSharedTable;
+    var sharedIndex = SharedIndexFromHash(hashCode);
+
+    string? entry = null;
+
+    // we use quadratic probing here
+    // bucket positions are (n^2 + n)/2 relative to the masked hashcode
+    for (var index = 1; index < SharedBucketSize + 1; index++)
+    {
+      entry = sharedArray[sharedIndex].Text;
+      var hash = sharedArray[sharedIndex].HashCode;
+
+      if (entry != null)
+      {
+        if (hash == hashCode && internSupport.TextEquals(entry, in source))
+          break;
+
+        // this is not entry we are looking for
+        entry = null;
+      }
+      else
+      {
+        // once we see unfilled entry, the rest of the bucket will be empty
+        break;
+      }
+
+      sharedIndex = (sharedIndex + index) & SharedSizeMask;
+    }
+
+    return entry;
   }
 
   private void AddCore(string chars, int hashCode)
@@ -277,7 +170,7 @@ public class StringTable
 
     // add to the local table too
     var array = myLocalTable;
-    var index = LocalIdxFromHash(hashCode);
+    var index = LocalIndexFromHash(hashCode);
     array[index].HashCode = hashCode;
     array[index].Text = chars;
   }
@@ -285,7 +178,7 @@ public class StringTable
   private void AddSharedEntry(int hashCode, string text)
   {
     var array = ourSharedTable;
-    var index = SharedIdxFromHash(hashCode);
+    var index = SharedIndexFromHash(hashCode);
 
     // try finding an empty spot in the bucket
     // we use quadratic probing here
@@ -312,12 +205,12 @@ public class StringTable
     Volatile.Write(ref array[index].Text, text);
   }
 
-  private static int LocalIdxFromHash(int hash)
+  private static int LocalIndexFromHash(int hash)
   {
     return hash & LocalSizeMask;
   }
 
-  private static int SharedIdxFromHash(int hash)
+  private static int SharedIndexFromHash(int hash)
   {
     // we can afford to mix some more hash bits here
     return (hash ^ (hash >> LocalSizeBits)) & SharedSizeMask;
@@ -326,36 +219,6 @@ public class StringTable
   private int LocalNextRandom()
   {
     return myLocalRandom++;
-  }
-
-  [Pure]
-  private static bool TextEquals(string array, string text, int start, int length)
-  {
-    if (array.Length != length) return false;
-
-    // use array.Length to eliminate the range check
-    for (var index = 0; index < array.Length; index++)
-    {
-      if (array[index] != text[start + index])
-        return false;
-    }
-
-    return true;
-  }
-
-  [Pure]
-  private static bool TextEquals(string array, char[] text, int start, int length)
-  {
-    if (array.Length != length) return false;
-
-    // use array.Length to eliminate the range check
-    for (var index = 0; index < array.Length; index++)
-    {
-      if (array[index] != text[start + index])
-        return false;
-    }
-
-    return true;
   }
 
   /// <summary>
@@ -371,34 +234,6 @@ public class StringTable
   public const int FnvPrime = 16777619;
 
   [Pure]
-  public static int GetFNVHashCode(string text, int start, int length)
-  {
-    var hashCode = FnvOffsetBias;
-    var end = start + length;
-
-    for (var index = start; index < end; index++)
-    {
-      hashCode = unchecked((hashCode ^ text[index]) * FnvPrime);
-    }
-
-    return hashCode;
-  }
-
-  [Pure]
-  public static int GetFNVHashCode(char[] text, int start, int length)
-  {
-    var hashCode = FnvOffsetBias;
-    var end = start + length;
-
-    for (var index = start; index < end; index++)
-    {
-      hashCode = unchecked((hashCode ^ text[index]) * FnvPrime);
-    }
-
-    return hashCode;
-  }
-
-  [Pure]
   public static int GetFNVHashCode(string text)
   {
     var hashCode = FnvOffsetBias;
@@ -410,4 +245,143 @@ public class StringTable
 
     return hashCode;
   }
+
+  private struct StringBuilderInternSupport : IStringInternSupport<StringBuilder>
+  {
+    public int GetFNVHashCode(in StringBuilder source)
+    {
+      var hashCode = FnvOffsetBias;
+
+      for (var index = 0; index < source.Length; index++)
+      {
+        // slow, no access to chunks
+        hashCode = unchecked((hashCode ^ source[index]) * FnvPrime);
+      }
+
+      return hashCode;
+    }
+
+    public bool TextEquals(string candidate, in StringBuilder source)
+    {
+      if (candidate.Length != source.Length)
+        return false;
+
+      for (var index = 0; index < candidate.Length; index++)
+      {
+        if (source[index] != candidate[index])
+          return false;
+      }
+
+      return true;
+    }
+
+    public string Materialize(in StringBuilder source)
+    {
+      return source.ToString();
+    }
+  }
+
+  private struct StringInternSupport : IStringInternSupport<string>
+  {
+    int IStringInternSupport<string>.GetFNVHashCode(in string source)
+    {
+      return StringTable.GetFNVHashCode(source);
+    }
+
+    bool IStringInternSupport<string>.TextEquals(string candidate, in string source)
+    {
+      return candidate == source;
+    }
+
+    string IStringInternSupport<string>.Materialize(in string source)
+    {
+      return source;
+    }
+  }
+
+  private struct CharArrayPartInternSupport : IStringInternSupport<(char[] chars, int start, int length)>
+  {
+    public int GetFNVHashCode(in (char[] chars, int start, int length) source)
+    {
+      var hashCode = FnvOffsetBias;
+      var end = source.start + source.length;
+      var chars = source.chars;
+
+      for (var index = source.start; index < end; index++)
+      {
+        hashCode = unchecked((hashCode ^ chars[index]) * FnvPrime);
+      }
+
+      return hashCode;
+    }
+
+    public bool TextEquals(string candidate, in (char[] chars, int start, int length) source)
+    {
+      if (candidate.Length != source.length) return false;
+
+      var chars = source.chars;
+      var start = source.start;
+
+      // use array.Length to eliminate the range check
+      for (var index = 0; index < candidate.Length; index++)
+      {
+        if (candidate[index] != chars[start + index])
+          return false;
+      }
+
+      return true;
+    }
+
+    public string Materialize(in (char[] chars, int start, int length) source)
+    {
+      return new string(source.chars, source.start, source.length);
+    }
+  }
+
+  private struct StringArrayPartInternSupport : IStringInternSupport<(string chars, int start, int length)>
+  {
+    public int GetFNVHashCode(in (string chars, int start, int length) source)
+    {
+      var hashCode = FnvOffsetBias;
+      var end = source.start + source.length;
+      var chars = source.chars;
+
+      for (var index = source.start; index < end; index++)
+      {
+        hashCode = unchecked((hashCode ^ chars[index]) * FnvPrime);
+      }
+
+      return hashCode;
+    }
+
+    public bool TextEquals(string candidate, in (string chars, int start, int length) source)
+    {
+      if (candidate.Length != source.length) return false;
+
+      var chars = source.chars;
+      var start = source.start;
+
+      // use array.Length to eliminate the range check
+      for (var index = 0; index < candidate.Length; index++)
+      {
+        if (candidate[index] != chars[start + index])
+          return false;
+      }
+
+      return true;
+    }
+
+    public string Materialize(in (string chars, int start, int length) source)
+    {
+      return source.chars.Substring(startIndex: source.start, length: source.length);
+    }
+  }
 }
+
+public interface IStringInternSupport<TSource>
+{
+  [Pure] int GetFNVHashCode(in TSource source);
+  [Pure] bool TextEquals(string candidate, in TSource source);
+  [Pure] string Materialize(in TSource source);
+}
+
