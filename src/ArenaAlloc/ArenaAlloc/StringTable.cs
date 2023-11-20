@@ -84,6 +84,12 @@ public class StringTable
   }
 
   [MustUseReturnValue]
+  public string Add(char ch)
+  {
+    return Add<char, CharInternSupport>(ch);
+  }
+
+  [MustUseReturnValue]
   public string Add(StringBuilder builder)
   {
     return Add<StringBuilder, StringBuilderInternSupport>(builder);
@@ -283,20 +289,24 @@ public class StringTable
 
   private struct StringInternSupport : IStringInternSupport<string>
   {
-    int IStringInternSupport<string>.GetFNVHashCode(in string source)
+    int IStringInternSupport<string>.GetFNVHashCode(in string source) => StringTable.GetFNVHashCode(source);
+    public bool TextEquals(string candidate, in string source) => candidate == source;
+    public string Materialize(in string source) => source;
+  }
+
+  private struct CharInternSupport : IStringInternSupport<char>
+  {
+    int IStringInternSupport<char>.GetFNVHashCode(in char source)
     {
-      return StringTable.GetFNVHashCode(source);
+      return unchecked((FnvOffsetBias ^ source) * FnvPrime);
     }
 
-    bool IStringInternSupport<string>.TextEquals(string candidate, in string source)
+    public bool TextEquals(string candidate, in char source)
     {
-      return candidate == source;
+      return candidate.Length == 1 && candidate[0] == source;
     }
 
-    string IStringInternSupport<string>.Materialize(in string source)
-    {
-      return source;
-    }
+    public string Materialize(in char source) => source.ToString();
   }
 
   private struct CharArrayPartInternSupport : IStringInternSupport<(char[] chars, int start, int length)>
