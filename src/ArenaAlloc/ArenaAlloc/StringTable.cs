@@ -138,7 +138,7 @@ public class StringTable
     {
       // PERF: the following code does element-wise assignment of a struct
       //       because current JIT produces better code compared to
-      //       local[index] = new Entry(...)
+      //       localTable[localIndex] = new Entry(...)
       localTable[localIndex].HashCode = hashCode;
       localTable[localIndex].Text = shared;
 
